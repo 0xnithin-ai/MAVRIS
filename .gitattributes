@@ -1,0 +1,26 @@
+# Normalize all line endings to LF in the repository.
+# Windows checkout will still get CRLF via core.autocrlf, but the repo stays LF.
+* text=auto eol=lf
+
+# Python source files — always LF
+*.py text eol=lf
+
+# Config / text files — always LF
+*.md text eol=lf
+*.txt text eol=lf
+*.yml text eol=lf
+*.yaml text eol=lf
+*.json text eol=lf
+*.toml text eol=lf
+*.env.example text eol=lf
+.gitignore text eol=lf
+
+# Binary files — never touch line endings
+*.pth binary
+*.pt binary
+*.ckpt binary
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.webp binary
+*.gif binary
