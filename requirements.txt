@@ -1,0 +1,12 @@
+torch
+torchvision
+timm
+Pillow
+langchain
+langchain-groq
+langchain-core
+langchain-community
+duckduckgo-search
+ddgs
+python-dotenv
+streamlit
