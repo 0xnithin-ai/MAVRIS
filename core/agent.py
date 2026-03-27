@@ -3,11 +3,11 @@ agent.py — LangChain/LangGraph agent with Groq LLM and tool binding.
 
 Architecture:
     User query + image path
-        -> ChatGroq (llama-3.1-8b-instant)
+        -> ChatGroq (llama-3.3-70b-versatile)           ← upgraded from 8b-instant
         -> langgraph.prebuilt.create_react_agent  (tool calling loop)
             -> classify_plant_image  (timm ViT-B/16, plant_model.pth, 28 classes)
-            -> fetch_disease_information  (Wikipedia REST + Groq fallback)
-            -> answer_plant_question  (Wikipedia REST + Groq fallback)
+            -> fetch_disease_information  (Curated KB → Wikipedia → Groq fallback)
+            -> answer_plant_question  (ChromaDB KB → Wikipedia → Groq fallback)
         -> Final structured response
 """
 
@@ -20,7 +20,7 @@ from .tools import TOOLS
 from .prompts import SYSTEM_PROMPT
 
 # Hard cap: agent cannot call more than this many steps total (prevents infinite loops)
-_MAX_ITERATIONS = 8
+_MAX_ITERATIONS = 18
 
 
 def build_agent():
@@ -35,9 +35,9 @@ def build_agent():
         )
 
     llm = ChatGroq(
-        model="llama-3.1-8b-instant",
+        model="llama-3.3-70b-versatile",   # upgraded: better reasoning & instruction following
         temperature=0,
-        max_tokens=1500,
+        max_tokens=2048,
         api_key=api_key,
     )
 

@@ -94,6 +94,7 @@ desktop.ini
 # =============================================================================
 data/
 uploads/
+.chromadb_knowledge/
 *.csv
 *.parquet
 *.json.gz
@@ -103,3 +104,4 @@ uploads/
 # =============================================================================
 test_search.py
 inspect_model.py
+test_ollama.py

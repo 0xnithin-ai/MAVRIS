@@ -6,7 +6,8 @@ langchain
 langchain-groq
 langchain-core
 langchain-community
-duckduckgo-search
-ddgs
+langgraph
+chromadb
 python-dotenv
 streamlit
+requests

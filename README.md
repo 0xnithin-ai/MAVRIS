@@ -1,133 +1,115 @@
-# Plant Disease Diagnosis Agent
+# 🌿 MAVRIS: Advanced Plant Disease Agent
+*(2026 AAAI-Grade Research Architecture)*
 
-A LangGraph ReAct agent that wraps a trained ViT model (`plant_model.pth`) to diagnose plant diseases
-from leaf photographs. After classification it retrieves expert disease information and composes
-a structured, actionable response.
+A **System 2, Multi-modal Test-Time Compute Agent** that diagnoses plant diseases from leaf photographs. It utilizes a trained ViT backbone for primary classification, a Curated Vector Knowledge Base for RAG, and an active **Visual Verification Loop** via a Vision-Language Model (LLaVA) to self-correct and detect hallucinations.
 
-## Architecture
+## 🔬 Key 2026 Autonomous Research Features
+
+1. **System 2 Visual Verification:** The agent doesn't blindly trust early predictions. If confidence is below 85%, it asks the local VLM (LLaVA) targeted questions (e.g., "Do you see concentric rings?") to physically verify the symptoms before responding.
+2. **Self-Correction Protocol:** If the VLM denies the primary symptom, the agent adapts—scaling its visual search to broad damage to compensate for low-res imagery instead of prematurely failing.
+3. **Calibrated Epistemic Uncertainty:** The ViT softmax logic is explicitly calibrated via **Temperature Scaling** (T=1.3). Confidence percentages are statistically rigorous mathematically.
+4. **Hierarchical Knowledge Retrieval:** 28 expert-crafted disease profiles in an $O(1)$ dictionary loop, backed by a semantic **ChromaDB** index, preventing Wikipedia-induced RAG wipeouts.
+
+---
+
+## 🏗️ Architecture
 
 ```mermaid
 flowchart TD
-    A["User — image + question"] --> B["Streamlit UI\napp.py"]
-    B --> C["PlantDiseaseAgent\ncore/agent.py"]
-    C --> D["LangGraph ReAct Agent\nlanggraph.prebuilt.create_react_agent\nrecursion_limit = 8"]
-    D --> E["LLM\nGroq — llama-3.1-8b-instant\ntemperature=0, max_tokens=1500"]
+    A["User — image + question"] --> B["Streamlit UI (app.py)"]
+    B --> C["LangGraph Reflexion Agent (core/agent.py)"]
+    C --> D["LLM — LLaMA-3.3-70B-Versatile"]
 
-    E -->|"tool call (once)"| F["classify_plant_image\ncore/model.py\ntimm vit_base_patch16_224\nplant_model.pth — strict=True — 152/152 keys\n28 disease classes — top-3 + raw_index"]
-
-    E -->|"tool call (once)"| G["fetch_disease_information\ncore/tools.py\nGroq structured summary — CAUSE / SYMPTOMS / TREATMENT / PREVENTION\n+ Wikipedia REST API background if available"]
-
-    E -->|"tool call (once)"| H["answer_plant_question\ncore/tools.py\nWikipedia REST API\n+ Groq expert fallback"]
-
-    F -->|"top_class + confidence + top3 + raw_index"| E
-    G -->|"structured expert summary"| E
-    H -->|"factual plant care answer"| E
-    E -->|"final structured response"| B
+    D -->|"Step 1: Predict"| E["classify_plant_image\nViT-B/16 + Temperature Scaler (T=1.3)"]
+    
+    D -->|"Step 2: Retrieve Facts"| F["fetch_disease_information\nChromaDB Curated KB + Wikipedia Fallback"]
+    
+    D -->|"Step 3: Verification Loop\n(Triggered if Confidence < 85%)"| G["verify_visual_trait\nOllama (LLaVA 7B) Visual RAG"]
+    
+    E -.->|"top_class + Calibrated %"| D
+    F -.->|"Structured KB Proof"| D
+    G -.->|"YES/NO + Visual Proof"| D
+    
+    D -->|"Step 4: Synthesize"| H["Final Structured Response"]
+    H --> B
 ```
 
-## Execution flow
+## 🔄 The Visual Verification Loop (Test-Time Compute)
 
-**When the user uploads an image (any question):**
-1. `classify_plant_image(image_path)` — ViT runs inference, returns top class, confidence %, top-3, raw class index
-2. `fetch_disease_information(top_class)` — Groq generates a structured CAUSE/SYMPTOMS/TREATMENT/PREVENTION summary; Wikipedia REST API adds background if available
-3. LLM composes the final structured response and stops
+**When the user uploads an image:**
+1. **Primary Classification:** ViT runs inference -> Scaled Confidence %.
+2. **Routing:**
+   - **>= 85% Confidence:** Retrieve KB traits, answer directly.
+   - **< 85% Confidence (Uncertain):** The agent stops. It retrieves the expected visual symptoms of the disease, and queries the local VLM (LLaVA): *"Do you see [symptom]?"*
+3. **Self-Correction:** If LLaVA fails to find the symptom (due to blurriness or incorrect ViT guess), the Agent formulates a broader safety question ("Do you see ANY damage?") to salvage the diagnosis or flags a True Discrepancy.
 
-**When no image is provided (text question only):**
-1. `answer_plant_question(question)` — Wikipedia REST API first; Groq expert fallback if Wikipedia misses
-2. LLM composes final response and stops
+## 📊 Confidence Routing Rules
 
-## Confidence thresholds
-
-| Confidence | Behaviour |
+| Calibrated Confidence | Agent Behaviour |
 |---|---|
-| 70% or above | Full diagnosis, symptoms, treatment, prevention |
-| 40 – 69% | Diagnosis with noted uncertainty, full treatment info |
-| Below 40% | No disease confirmed. Shows top-3 guesses. Asks for a clearer photo |
+| **85% or above** | High confidence. Trust ViT. Full diagnosis, symptoms, and treatment. |
+| **40% – 84%** | Moderate. Ambiguous image. **Must trigger Visual Verification Loop (LLaVA)**. |
+| **Below 40%** | Low confidence. ViT is stumped. Run Visual Verification on TOP-2 closest guesses to determine true label. |
 
-## Key design decisions
+---
 
-- **`langgraph.prebuilt.create_react_agent`** — modern tool-calling loop, no fragile string parsing
-- **`recursion_limit=8`** — hard cap on agent steps, prevents infinite loops or hangs
-- **Singleton classifier** — `plant_model.pth` loads once into GPU/CPU memory at startup, never reloaded
-- **`strict=True` weight loading** — all 152 ViT keys verified, zero silent mismatches
-- **Dual-source retrieval** — Groq always generates a structured 4-section expert summary; Wikipedia adds scientific background when available. No native DLLs required (pure `requests`)
-- **Prompt-enforced ONCE rule** — system prompt explicitly prevents the LLM from calling any tool more than once per turn
-- **No disclaimers** — prompt forbids "incomplete response" notes; LLM always composes a complete answer from available data
-
-## Project structure
+## 📂 Project Structure
 
 ```
 MAVRIS/
-  app.py               — Streamlit UI (two-column, session cache, green theme)
-  requirements.txt     — Python dependencies
-  .env.example         — Environment variable template
-  plant_model.pth      — Trained ViT weights (not committed to git)
+  app.py                 — Streamlit Visual Interface
+  requirements.txt       — Dependencies (langgraph, chromadb, etc.)
+  plant_model.pth        — Trained ViT weights
+  .chromadb_knowledge/   — Cached semantic vector index (built on first run)
   core/
-    __init__.py
-    model.py           — timm vit_base_patch16_224 singleton + 28-class labels
-    tools.py           — 3 LangChain @tool functions + Wikipedia/Groq retrieval
-    prompts.py         — System prompt (execution order, confidence rules, response format)
-    agent.py           — create_react_agent + PlantDiseaseAgent wrapper
+    agent.py             — Multi-turn ReAct Graph logic (_MAX_ITERATIONS=18)
+    knowledge_base.py    — Curated 28-class agronomic profiles + ChromaDB
+    model.py             — ViT Singleton + TemperatureScaler active
+    tools.py             — 4 LangChain @tools (ViT, KB, Search, LLaVA VLM)
+    prompts.py           — o3-style Test-Time Compute instructions
+    retriever.py         — Clean search abstraction layer
 ```
 
-## Setup
+## 🚀 Setup & Execution
 
-### 1. Install dependencies
-
-Use the existing PyTorch venv or create a new one:
-
+### 1. Requirements
+Ensure you have `Ollama` installed on your machine with the `llava` model pulled for the verification loop to work:
 ```bash
-# Using existing venv
-C:\Users\Nithin\Desktop\pytorch\venv\Scripts\python.exe -m pip install -r requirements.txt
+ollama run llava
 ```
 
-### 2. Configure environment
-
-```bash
-copy .env.example .env
-```
-
-Edit `.env`:
-
-```
+### 2. Environment Variables
+Create a `.env` file from the example:
+```env
 GROQ_API_KEY=gsk_your_actual_key_here
 MODEL_PATH=./plant_model.pth
 ```
 
-### 3. Run the app
+### 3. Run the System
+Run it using your dedicated PyTorch environment (Hardware Acceleration is automatically handled across ViT and Ollama):
 
 ```bash
 C:\Users\Nithin\Desktop\pytorch\venv\Scripts\python.exe -m streamlit run app.py
 ```
 
-Opens at `http://localhost:8501`.
+Opens locally at `http://localhost:8501`.
 
-## Usage
+## 🧪 Response Format
 
-1. Upload a clear, well-lit photograph of a plant leaf showing disease symptoms.
-2. Type any question — "what is this?", "how do I treat it?", or leave it as-is.
-3. Click **Run Diagnosis**.
+```text
+Diagnosis: [Disease Name]
+Confidence: [Calibrated %] — High / Moderate / Low
+Visual Verification: [Confirmed exact symptom / general damage confirmed / True Discrepancy Found] 
 
-The agent classifies the image, retrieves expert knowledge, and returns:
-
-```
-Diagnosis: [disease name]
-Confidence: [%] — High / Moderate / Low
-
-Summary: ...
+Summary: [Knowledge Base Synthesis]
 
 Symptoms to look for:
-- ...
+- [Symptom 1]
+- [Symptom 2]
 
 Recommended treatment:
-1. ...
+1. [Actionable step]
 
 Prevention:
-- ...
+- [Best practice]
 ```
-
-## Class labels note
-
-The model has 28 output classes ordered by training folder structure. If a prediction looks wrong,
-check the `raw_class_index` in the terminal output and compare against the `PLANT_CLASSES` list
-in `core/model.py`. Reorder the list to match your training dataset's `class_to_idx` mapping.
