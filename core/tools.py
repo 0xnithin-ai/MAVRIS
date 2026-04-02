@@ -8,9 +8,11 @@ Retrieval priority chain (researched-grade, reliable):
     FALLBACK:  Groq LLM knowledge — last resort
 
 Flow when user uploads image:
-    1. classify_plant_image   -> ViT model -> top class + confidence
-    2. fetch_disease_info     -> Curated KB (primary) + Wikipedia (supplement)
-    3. answer_plant_question  -> ChromaDB KB + Wikipedia + Groq fallback
+    1. classify_plant_image       -> ViT model -> top class + confidence
+    2. fetch_disease_information  -> Curated KB (primary) + Wikipedia (supplement)
+    3. verify_visual_trait        -> LLaVA VLM -> YES/NO symptom verification
+    4. synthesize_final_diagnosis -> LLM Arbitrator -> Final structured verdict
+    5. answer_plant_question      -> ChromaDB KB + Wikipedia + Groq fallback (text-only)
 """
 
 import json
@@ -246,4 +248,140 @@ def verify_visual_trait(image_path: str, trait_question: str) -> str:
     except Exception as e:
         return f"[VLM Verification Failed] Local LLaVA connection issue. Error: {str(e)}"
 
-TOOLS = [classify_plant_image, fetch_disease_information, answer_plant_question, verify_visual_trait]
+
+# ---------------------------------------------------------------------------
+# Tool 5: LLM Arbitrator — Synthesize all evidence into a final diagnosis
+# ---------------------------------------------------------------------------
+@tool
+def synthesize_final_diagnosis(
+    classification_result: str,
+    disease_info: str,
+    visual_verification: str,
+) -> str:
+    """
+    Synthesize all evidence gathered during the pipeline into a final, structured diagnosis.
+
+    This is the LLM-as-Judge step. Call this as the LAST tool, after you have:
+      - classification_result : the raw JSON string from classify_plant_image
+      - disease_info          : the full text returned by fetch_disease_information
+      - visual_verification   : the text returned by verify_visual_trait
+                                (pass 'NOT_PERFORMED' if confidence was >= 85% and LLaVA was skipped)
+
+    The arbitrator LLM weighs the ViT confidence, the LLaVA visual confirmation, and the
+    knowledge-base facts to resolve any conflict and produce one final authoritative verdict.
+
+    Returns: A JSON string with keys:
+        final_disease     - the agreed-upon disease name
+        final_confidence  - 'High' / 'Moderate' / 'Low'
+        agreement         - 'AGREEMENT' | 'CONFLICT_RESOLVED' | 'UNRESOLVABLE'
+        reasoning         - 1-2 sentence arbitration rationale
+        recommended_action- practical next step for the farmer
+    """
+    # ── Parse confidence from the ViT JSON ──────────────────────────────────
+    try:
+        clf_data = json.loads(classification_result)
+        vit_disease    = clf_data.get("top_prediction", "Unknown")
+        vit_conf_str   = clf_data.get("confidence", "0%")
+        vit_conf_val   = float(vit_conf_str.replace("%", "")) / 100
+        top3_str       = json.dumps(clf_data.get("top_3_predictions", []))
+    except Exception:
+        vit_disease   = "Unknown"
+        vit_conf_val  = 0.0
+        top3_str      = classification_result
+
+    llava_skipped = (visual_verification.strip().upper() == "NOT_PERFORMED")
+    llava_summary = "LLaVA visual verification was not performed (confidence was >= 85%)." \
+                    if llava_skipped else visual_verification
+
+    arbitration_prompt = f"""\
+You are a senior plant pathologist AI arbitrator. Your task is to weigh three independent
+sources of evidence and produce ONE definitive diagnosis.
+
+== EVIDENCE ==
+
+[A] ViT Deep-Learning Classifier
+  Disease predicted : {vit_disease}
+  Calibrated confidence : {vit_conf_val * 100:.1f}%
+  Top-3 predictions : {top3_str}
+
+[B] LLaVA Visual Verification (Vision-Language Model)
+{llava_summary}
+
+[C] Domain Knowledge Base
+{disease_info[:800]}
+
+== YOUR TASK ==
+Given the three evidence blocks above, determine:
+1. Do the ViT classifier and LLaVA AGREE on the diagnosis? (AGREEMENT)
+   Or does LLaVA contradict the ViT? (CONFLICT_RESOLVED or UNRESOLVABLE)
+2. What is the final disease name?
+3. What is the final confidence level (High / Moderate / Low)?
+4. In 1-2 sentences, explain your arbitration reasoning.
+5. Provide one practical recommended_action for the farmer right now.
+
+Respond ONLY with valid JSON with these exact keys:
+{{
+  "final_disease": "...",
+  "final_confidence": "High|Moderate|Low",
+  "agreement": "AGREEMENT|CONFLICT_RESOLVED|UNRESOLVABLE",
+  "reasoning": "...",
+  "recommended_action": "..."
+}}
+
+Do not add any text outside the JSON.
+"""
+
+    api_key = os.getenv("GROQ_API_KEY", "")
+    if not api_key:
+        return json.dumps({
+            "final_disease": vit_disease,
+            "final_confidence": "High" if vit_conf_val >= 0.85 else "Moderate" if vit_conf_val >= 0.40 else "Low",
+            "agreement": "NOT_PERFORMED",
+            "reasoning": "GROQ_API_KEY not set; returning raw ViT output without arbitration.",
+            "recommended_action": "Set GROQ_API_KEY in .env to enable LLM arbitration.",
+        })
+
+    try:
+        llm = ChatGroq(
+            model="llama-3.3-70b-versatile",
+            temperature=0,          # deterministic arbitration
+            max_tokens=512,
+            api_key=api_key,
+        )
+        response = llm.invoke(arbitration_prompt)
+        raw = response.content.strip()
+
+        # Guard: strip markdown fences if the LLM wraps in ```json ... ```
+        if raw.startswith("```"):
+            raw = raw.split("```")[1]
+            if raw.startswith("json"):
+                raw = raw[4:]
+        verdict = json.loads(raw)
+    except json.JSONDecodeError:
+        # Fallback: return plain text from LLM if it refuses JSON
+        verdict = {
+            "final_disease": vit_disease,
+            "final_confidence": "Moderate",
+            "agreement": "CONFLICT_RESOLVED",
+            "reasoning": raw[:300],
+            "recommended_action": "Consult a local agronomist for confirmation.",
+        }
+    except Exception as e:
+        verdict = {
+            "final_disease": vit_disease,
+            "final_confidence": "Low",
+            "agreement": "UNRESOLVABLE",
+            "reasoning": f"Arbitration LLM call failed: {str(e)}",
+            "recommended_action": "Please try again or consult an agronomist.",
+        }
+
+    return json.dumps(verdict, indent=2)
+
+
+TOOLS = [
+    classify_plant_image,
+    fetch_disease_information,
+    verify_visual_trait,
+    synthesize_final_diagnosis,
+    answer_plant_question,
+]

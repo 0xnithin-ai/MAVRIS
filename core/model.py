@@ -159,7 +159,9 @@ class PlantClassifier:
                 "timm is required. Install with: pip install timm"
             )
 
-        self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        # Force CPU for the ViT classifier. ViT-Base inference is extremely fast on CPU (<50ms).
+        # This frees up the entire 4GB GPU specifically for the heavy LLaVA Vision-Language Model during Test-Time Compute!
+        self.device = torch.device("cpu")
 
         self.model = timm.create_model(
             "vit_base_patch16_224",
